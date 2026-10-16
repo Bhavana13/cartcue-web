@@ -347,19 +347,32 @@ export default function App() {
 
                   {wishlist.length > 0 && (
                     <div className="mb-6 p-4 bg-purple-50 rounded-xl border border-purple-100">
-                      <h4 className="text-xs font-bold text-purple-900 uppercase mb-2">Wishlist (Price Hesitation Test)</h4>
+                      <h4 className="text-xs font-bold text-purple-900 uppercase mb-2">Wishlist (Dynamic AI Offer Test)</h4>
                       {wishlist.map((w, idx) => {
-                        const discountedPrice = Math.round(w.price * 0.9);
+                        const isExpressUpgrade = w.price > 1500;
+                        const adjustedPrice = isExpressUpgrade ? w.price : Math.round(w.price * 0.9);
+                        
                         return (
                           <div key={idx} className="flex justify-between items-center text-xs text-purple-800 py-2 border-b border-purple-200/50 last:border-0">
                             <div>
                               <p className="font-semibold">{w.name}</p>
-                              <span className="line-through text-gray-400">Rs. {w.price}</span>{' '}
-                              <span className="text-green-600 font-bold">Rs. {discountedPrice} (10% Off)</span>
+                              {isExpressUpgrade ? (
+                                <span className="text-blue-600 font-bold">✨ Free Same-Day Priority Delivery Unlocked!</span>
+                              ) : (
+                                <>
+                                  <span className="line-through text-gray-400">Rs. {w.price}</span>{' '}
+                                  <span className="text-green-600 font-bold">Rs. {adjustedPrice} (10% Off)</span>
+                                </>
+                              )}
                             </div>
                             <button
                               onClick={() => {
-                                setCart([...cart, { ...w, price: discountedPrice }]);
+                                // If it's an express upgrade, automatically switch the selected shipping option to Priority
+                                if (isExpressUpgrade) {
+                                  const priorityOpt = SHIPPING_OPTIONS.find(opt => opt.label.includes('Priority')) || SHIPPING_OPTIONS[2];
+                                  setSelectedShipping({ ...priorityOpt, fee: 0 }); // Apply free priority shipping perk!
+                                }
+                                setCart([...cart, { ...w, price: adjustedPrice }]);
                                 setWishlist(wishlist.filter(item => item.id !== w.id));
                               }}
                               className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition shadow-sm"
