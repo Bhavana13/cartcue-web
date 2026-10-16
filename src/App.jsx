@@ -38,7 +38,7 @@ export default function App() {
   const [selectedShipping, setSelectedShipping] = useState(SHIPPING_OPTIONS[0]);
 
   // Dashboard states
-  const [sessionId, setSessionId] = useState('cs_bb595b2f');
+  const [sessionId, setSessionId] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
