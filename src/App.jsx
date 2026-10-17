@@ -50,6 +50,8 @@ export default function App() {
   const [exitAiMessage, setExitAiMessage] = useState('');
   const [isFetchingExitAi, setIsFetchingExitAi] = useState(false);
   const [hasTriggeredExit, setHasTriggeredExit] = useState(false);
+  const [exitOffer, setExitOffer] = useState(null);
+  const [exitOfferApplied, setExitOfferApplied] = useState(false);
   
   // Checkout options state
   const [selectedPayment, setSelectedPayment] = useState('PhonePe');
@@ -84,7 +86,7 @@ export default function App() {
   // AI-Driven Exit-Intent Mouseleave Event Listener
   useEffect(() => {
   const handleMouseLeave = async (e) => {
-    if (e.clientY <= 10 && !showExitModal && !hasTriggeredExit && cart.length > 0) {
+    if (e.clientY <= 10 && !showExitModal && !hasTriggeredExit && !isBagOpen && cart.length > 0) {
         setShowExitModal(true);
         setHasTriggeredExit(true); // Ensures it only triggers once!
         setIsFetchingExitAi(true);
@@ -97,9 +99,11 @@ export default function App() {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           setExitAiMessage(data.message);
+          setExitOffer(data.offer_type ? { type: data.offer_type, label: data.offer_label } : null);
         } catch (err) {
           console.error('Exit intent AI error:', err);
-          setExitAiMessage("We noticed you left items in your bag. Stay a bit longer and unlock special perks!");
+          setExitAiMessage("We noticed you left items in your bag. Stay a bit longer!");
+          setExitOffer(null);
         } finally {
           setIsFetchingExitAi(false);
         }
@@ -107,7 +111,21 @@ export default function App() {
     };
     document.addEventListener('mouseleave', handleMouseLeave);
     return () => document.removeEventListener('mouseleave', handleMouseLeave);
-  }, [showExitModal, hasTriggeredExit, cart, finalTotalAmount]);
+  }, [showExitModal, hasTriggeredExit, isBagOpen, cart, finalTotalAmount]);
+
+  // Applies the offer Nova presented in the exit-intent popup, then shows the updated bag
+  const applyExitOffer = () => {
+    if (exitOffer?.type === 'FREE_PRIORITY_DELIVERY') {
+      const priorityOpt = SHIPPING_OPTIONS.find(opt => opt.label.includes('Priority')) || SHIPPING_OPTIONS[2];
+      setSelectedShipping({ ...priorityOpt, fee: 0, waived: true });
+    } else if (exitOffer?.type === 'PERCENT_OFF_10') {
+      // Items already discounted by a wishlist offer keep their price
+      setCart(cart.map(item => item.novaOffer ? item : { ...item, price: Math.round(item.price * 0.9), novaOffer: true }));
+    }
+    setExitOfferApplied(true);
+    setShowExitModal(false);
+    setIsBagOpen(true);
+  };
 
   const loadDashboardData = () =>
     fetchDashboardData()
@@ -182,7 +200,7 @@ export default function App() {
           payment_method: selectedPayment,
           shipping_method: selectedShipping.label,
           shipping_fee_waived: Boolean(selectedShipping.waived),
-          recovery_source: isAiAgentOrder ? 'NOVA_WISHLIST_AGENT' : 'ORGANIC',
+          recovery_source: !isAiAgentOrder ? 'ORGANIC' : exitOfferApplied ? 'NOVA_EXIT_INTENT_AGENT' : 'NOVA_WISHLIST_AGENT',
           nova_intervention_triggered: isAiAgentOrder
         })
       });
@@ -194,6 +212,7 @@ export default function App() {
 
       setCart([]);
       setSelectedShipping(SHIPPING_OPTIONS[0]);
+      setExitOfferApplied(false);
       setWishlist([]);
       setAgentMessage(null);
       setIsBagOpen(false);
@@ -327,23 +346,39 @@ export default function App() {
             {isFetchingExitAi ? (
               <p className="text-sm text-gray-500 py-4">Nova is analyzing your cart for personalized perks...</p>
             ) : (
-              <p className="text-sm text-purple-700 font-medium bg-purple-50 p-3 rounded-xl border border-purple-100 mb-6">
-                "{exitAiMessage}"
-              </p>
+              <>
+                <p className="text-sm text-purple-700 font-medium bg-purple-50 p-3 rounded-xl border border-purple-100 mb-3">
+                  "{exitAiMessage}"
+                </p>
+                {exitOffer && (
+                  <p className="text-xs font-bold text-green-700 mb-6">🎁 Your offer: {exitOffer.label}</p>
+                )}
+              </>
             )}
 
             <div className="flex gap-3">
-              <button
-                onClick={() => setShowExitModal(false)}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer"
-              >
-                Continue Shopping 🛍️
-              </button>
+              {exitOffer ? (
+                <button
+                  onClick={applyExitOffer}
+                  disabled={isFetchingExitAi}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  Apply Offer 🎁
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowExitModal(false)}
+                  disabled={isFetchingExitAi}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  Continue Shopping 🛍️
+                </button>
+              )}
               <button
                 onClick={() => setShowExitModal(false)}
                 className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-semibold transition cursor-pointer"
               >
-                Dismiss
+                No Thanks
               </button>
             </div>
           </div>
