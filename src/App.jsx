@@ -37,6 +37,7 @@ export default function App() {
   const [showExitModal, setShowExitModal] = useState(false);
   const [exitAiMessage, setExitAiMessage] = useState('');
   const [isFetchingExitAi, setIsFetchingExitAi] = useState(false);
+  const [hasTriggeredExit, setHasTriggeredExit] = useState(false);
   
   // Checkout options state
   const [selectedPayment, setSelectedPayment] = useState('PhonePe');
@@ -70,9 +71,10 @@ export default function App() {
 
   // AI-Driven Exit-Intent Mouseleave Event Listener
   useEffect(() => {
-    const handleMouseLeave = async (e) => {
-      if (e.clientY <= 10 && !showExitModal && cart.length > 0) {
+  const handleMouseLeave = async (e) => {
+    if (e.clientY <= 10 && !showExitModal && !hasTriggeredExit && cart.length > 0) {
         setShowExitModal(true);
+        setHasTriggeredExit(true); // Ensures it only triggers once!
         setIsFetchingExitAi(true);
         try {
           const res = await fetch('http://127.0.0.1:8000/agent/exit-intent', {
@@ -94,7 +96,7 @@ export default function App() {
     };
     document.addEventListener('mouseleave', handleMouseLeave);
     return () => document.removeEventListener('mouseleave', handleMouseLeave);
-  }, [showExitModal, cart, finalTotalAmount]);
+  }, [showExitModal, hasTriggeredExit, cart, finalTotalAmount]);
 
   useEffect(() => {
     if (currentRoute === '#dashboard') {
@@ -323,13 +325,13 @@ export default function App() {
             <div className="flex gap-3">
               <button
                 onClick={() => setShowExitModal(false)}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md"
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer"
               >
                 Continue Shopping 🛍️
               </button>
               <button
                 onClick={() => setShowExitModal(false)}
-                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-semibold transition"
+                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-semibold transition cursor-pointer"
               >
                 Dismiss
               </button>
