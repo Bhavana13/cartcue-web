@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // Cloud Run URL comes from .env.production at build time; local dev talks to uvicorn
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
@@ -45,13 +45,16 @@ export default function App() {
   const [isBagOpen, setIsBagOpen] = useState(false);
   const [agentMessage, setAgentMessage] = useState(null);
   
-  // Exit-Intent AI states
-  const [showExitModal, setShowExitModal] = useState(false);
-  const [exitAiMessage, setExitAiMessage] = useState('');
-  const [isFetchingExitAi, setIsFetchingExitAi] = useState(false);
-  const [hasTriggeredExit, setHasTriggeredExit] = useState(false);
-  const [exitOffer, setExitOffer] = useState(null);
+  // Nova offer notifications (replaces the exit-intent popup)
+  const [notifications, setNotifications] = useState([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isNovaAnalyzing, setIsNovaAnalyzing] = useState(false);
+  const [toast, setToast] = useState(null);
   const [exitOfferApplied, setExitOfferApplied] = useState(false);
+  // Abandoned session captured when the shopper dismissed an offer; a later order completes it
+  const [abandonedSessionId, setAbandonedSessionId] = useState(null);
+  const analyzedBagsRef = useRef(new Set());
+  const requestOfferRef = useRef(null);
   
   // Checkout options state
   const [selectedPayment, setSelectedPayment] = useState('PhonePe');
@@ -83,55 +86,157 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // AI-Driven Exit-Intent Mouseleave Event Listener
+  // One analysis per bag state (items, prices and shipping fee)
+  const bagKey = `${cart.map(item => `${item.id}:${item.price}`).join(',')}|${selectedShipping.fee}`;
+
+  // Nova analyses the bag in the background and posts its offer to the bell; it never blocks the page
+  const requestNovaOffer = async () => {
+    if (cart.length === 0 || exitOfferApplied || analyzedBagsRef.current.has(bagKey)) return;
+    analyzedBagsRef.current.add(bagKey);
+    setIsNovaAnalyzing(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/agent/exit-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cart_items: cart,
+          total_value: finalTotalAmount,
+          shipping_fee: selectedShipping.fee,
+          shipping_method: selectedShipping.label
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.offer_type) return;
+      const notification = {
+        id: `${Date.now()}`,
+        message: data.message,
+        offer: { type: data.offer_type, label: data.offer_label, evidence: data.evidence_summary?.[0] },
+        diagnosedCause: data.diagnosed_cause,
+        // The bag this offer was made for, so a dismissal records exactly what the shopper saw
+        bag: {
+          items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, category: i.category })),
+          itemsTotal,
+          total: finalTotalAmount,
+          shippingFee: selectedShipping.fee,
+          shippingLabel: selectedShipping.label
+        },
+        status: 'active',
+        read: false
+      };
+      // A newer offer replaces any earlier one the shopper hasn't acted on
+      setNotifications(prev => [notification, ...prev.map(n => n.status === 'active' ? { ...n, status: 'expired' } : n)]);
+      setToast(notification);
+      setTimeout(() => setToast(current => (current?.id === notification.id ? null : current)), 7000);
+    } catch (err) {
+      console.error('Nova offer error:', err);
+      analyzedBagsRef.current.delete(bagKey); // allow a retry for this bag
+    } finally {
+      setIsNovaAnalyzing(false);
+    }
+  };
+
   useEffect(() => {
-  const handleMouseLeave = async (e) => {
-    if (e.clientY <= 10 && !showExitModal && !hasTriggeredExit && !isBagOpen && cart.length > 0) {
-        setShowExitModal(true);
-        setHasTriggeredExit(true); // Ensures it only triggers once!
-        setIsFetchingExitAi(true);
-        try {
-          const res = await fetch(`${API_BASE_URL}/agent/exit-intent`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              cart_items: cart,
-              total_value: finalTotalAmount,
-              shipping_fee: selectedShipping.fee,
-              shipping_method: selectedShipping.label
-            })
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          setExitAiMessage(data.message);
-          setExitOffer(data.offer_type
-            ? { type: data.offer_type, label: data.offer_label, evidence: data.evidence_summary?.[0] }
-            : null);
-        } catch (err) {
-          console.error('Exit intent AI error:', err);
-          setExitAiMessage("We noticed you left items in your bag. Stay a bit longer!");
-          setExitOffer(null);
-        } finally {
-          setIsFetchingExitAi(false);
-        }
-      }
+    requestOfferRef.current = requestNovaOffer;
+  });
+
+  // Signal 1: the bag sits unchanged for a few seconds (hesitation)
+  useEffect(() => {
+    if (cart.length === 0) return;
+    const timer = setTimeout(() => requestOfferRef.current?.(), 5000);
+    return () => clearTimeout(timer);
+  }, [bagKey, cart.length]);
+
+  // Signal 2: the mouse heads for the tab bar (exit intent)
+  useEffect(() => {
+    const handleMouseLeave = (e) => {
+      if (e.clientY <= 10) requestOfferRef.current?.();
     };
     document.addEventListener('mouseleave', handleMouseLeave);
     return () => document.removeEventListener('mouseleave', handleMouseLeave);
-  }, [showExitModal, hasTriggeredExit, isBagOpen, cart, finalTotalAmount, selectedShipping]);
+  }, []);
 
-  // Applies the offer Nova presented in the exit-intent popup, then shows the updated bag
-  const applyExitOffer = () => {
-    if (exitOffer?.type === 'FREE_SHIPPING') {
+  // Applies a Nova offer from the notifications, then shows the updated bag
+  const applyNovaOffer = (notification) => {
+    if (notification.offer.type === 'FREE_SHIPPING') {
       // Nova diagnosed the delivery fee as the problem: waive it on the shopper's chosen option
       setSelectedShipping({ ...selectedShipping, fee: 0, waived: true });
-    } else if (exitOffer?.type === 'PERCENT_OFF_10') {
+    } else if (notification.offer.type === 'PERCENT_OFF_10') {
       // Items already discounted by a wishlist offer keep their price
       setCart(cart.map(item => item.novaOffer ? item : { ...item, price: Math.round(item.price * 0.9), novaOffer: true }));
     }
+    setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, status: 'applied' } : n));
     setExitOfferApplied(true);
-    setShowExitModal(false);
+    setToast(null);
+    setIsNotifOpen(false);
     setIsBagOpen(true);
+  };
+
+  const updateNotification = (id, changes) =>
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, ...changes } : n));
+
+  // A dismissed offer means the shopper is hesitating without a fix: save the bag as an abandoned checkout,
+  // with the same telemetry and Nova's live diagnosis, so the dashboard's Analyze and Recover pick it up
+  const dismissNovaOffer = async (notification) => {
+    updateNotification(notification.id, { status: 'dismissed', saving: true });
+    const sessionId = `cs_${Math.random().toString(16).slice(2, 10)}`;
+    const { bag } = notification;
+    const now = Date.now();
+    const at = (seconds) => new Date(now + seconds * 1000).toISOString();
+    try {
+      const res = await fetch(`${API_BASE_URL}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          item_count: bag.items.length,
+          cart_value: bag.total,
+          items: bag.items,
+          ground_truth_cause: notification.diagnosedCause || 'UNKNOWN',
+          drop_off_step: 'REVIEW',
+          origin: 'NOVA_OFFER_DISMISSED',
+          status: 'abandoned',
+          created_at: new Date(now).toISOString(),
+          events: [
+            { timestamp: at(0), event_type: 'STEP_TRANSITION', step_name: 'CART', metadata: { cart_value: bag.itemsTotal } },
+            { timestamp: at(1), event_type: 'STEP_TRANSITION', step_name: 'REVIEW',
+              metadata: { shipping_cost_shown: bag.shippingFee, shipping_option: bag.shippingLabel } },
+            { timestamp: at(2), event_type: 'NOVA_OFFER_DISMISSED', step_name: 'REVIEW',
+              metadata: { offer_type: notification.offer.type, offer_label: notification.offer.label } }
+          ]
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setAbandonedSessionId(sessionId);
+      updateNotification(notification.id, { saving: false, sessionId });
+    } catch (err) {
+      console.error('Failed to save abandoned checkout:', err);
+      updateNotification(notification.id, { saving: false, saveFailed: true });
+    }
+  };
+
+  const toggleNotifications = () => {
+    setIsNotifOpen(open => !open);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const openNotificationsFromToast = () => {
+    setToast(null);
+    setIsBagOpen(false);
+    setIsNotifOpen(true);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  // An order or a simulated drop-off ends the shopping journey: Nova starts fresh for the next bag
+  const startNewShoppingJourney = () => {
+    analyzedBagsRef.current.clear();
+    setExitOfferApplied(false);
+    setAbandonedSessionId(null);
+    setNotifications([]);
+    setToast(null);
+    setIsNotifOpen(false);
   };
 
   const loadDashboardData = () =>
@@ -207,6 +312,7 @@ export default function App() {
           payment_method: selectedPayment,
           shipping_method: selectedShipping.label,
           shipping_fee_waived: Boolean(selectedShipping.waived),
+          session_id: abandonedSessionId,
           recovery_source: !isAiAgentOrder ? 'ORGANIC' : exitOfferApplied ? 'NOVA_EXIT_INTENT_AGENT' : 'NOVA_WISHLIST_AGENT',
           nova_intervention_triggered: isAiAgentOrder
         })
@@ -219,7 +325,7 @@ export default function App() {
 
       setCart([]);
       setSelectedShipping(SHIPPING_OPTIONS[0]);
-      setExitOfferApplied(false);
+      startNewShoppingJourney();
       setWishlist([]);
       setAgentMessage(null);
       setIsBagOpen(false);
@@ -290,6 +396,7 @@ export default function App() {
       setIsBagOpen(false);
       setCart([]);
       setSelectedShipping(SHIPPING_OPTIONS[0]);
+      startNewShoppingJourney();
       window.location.hash = '#dashboard';
     } catch (err) {
       console.error(err);
@@ -370,63 +477,80 @@ export default function App() {
         </div>
 
         {currentRoute === '#store' && (
-          <button onClick={() => setIsBagOpen(true)} className="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-bold rounded-lg shadow transition flex items-center gap-2">
-            🛒 Bag ({cart.length}) {wishlist.length > 0 && `| 💡 Wishlist (${wishlist.length})`}
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <button
+                onClick={toggleNotifications}
+                aria-label={`Nova notifications${unreadCount ? `, ${unreadCount} new` : ''}`}
+                title={isNovaAnalyzing ? 'Nova is analysing your bag…' : 'Nova notifications'}
+                className="relative w-10 h-10 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center text-lg transition"
+              >
+                🔔
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-purple-600 text-white text-[10px] font-bold flex items-center justify-center">{unreadCount}</span>
+                )}
+                {isNovaAnalyzing && unreadCount === 0 && (
+                  <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-500 animate-ping"></span>
+                )}
+              </button>
+
+              {isNotifOpen && (
+                <div className="absolute right-0 mt-2 w-96 max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 overflow-hidden">
+                  <div className="flex justify-between items-center px-4 py-3 border-b border-gray-100">
+                    <h3 className="text-sm font-bold text-gray-800">🤖 Nova offers</h3>
+                    <button onClick={() => setIsNotifOpen(false)} aria-label="Close notifications" className="text-gray-400 hover:text-gray-700 font-bold">✕</button>
+                  </div>
+                  <div className="max-h-[70vh] overflow-y-auto divide-y divide-gray-100">
+                    {isNovaAnalyzing && (
+                      <p className="px-4 py-3 text-xs text-purple-700 animate-pulse">Nova is analysing your bag…</p>
+                    )}
+                    {notifications.length === 0 && !isNovaAnalyzing && (
+                      <p className="px-4 py-6 text-xs text-gray-500 text-center">No offers yet. Nova checks your bag a few seconds after you add items.</p>
+                    )}
+                    {notifications.map(n => (
+                      <div key={n.id} className={`px-4 py-3 space-y-2 ${n.status === 'active' ? '' : 'opacity-60'}`}>
+                        <p className="text-sm text-purple-800">{n.message}</p>
+                        {n.offer.evidence && <p className="text-[11px] text-gray-500">🔍 Nova noticed: {n.offer.evidence}</p>}
+                        <p className="text-xs font-bold text-green-700">🎁 {n.offer.label}</p>
+                        {n.status === 'active' ? (
+                          <div className="flex gap-2">
+                            <button onClick={() => applyNovaOffer(n)} className="flex-1 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition">Apply offer</button>
+                            <button onClick={() => dismissNovaOffer(n)} className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold rounded-lg transition">Dismiss</button>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] font-semibold text-gray-500">
+                            {n.status === 'applied' && '✓ Applied to your bag'}
+                            {n.status === 'expired' && 'Replaced by a newer offer'}
+                            {n.status === 'dismissed' && (
+                              n.saving ? 'Dismissed · saving the abandoned checkout…'
+                                : n.saveFailed ? 'Dismissed · could not save the abandoned checkout'
+                                : `Dismissed · saved as abandoned checkout ${n.sessionId}. Analyze it on the CartCue AI Dashboard.`
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button onClick={() => setIsBagOpen(true)} className="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-bold rounded-lg shadow transition flex items-center gap-2">
+              🛒 Bag ({cart.length}) {wishlist.length > 0 && `| 💡 Wishlist (${wishlist.length})`}
+            </button>
+          </div>
         )}
       </nav>
 
-      {/* AI-Driven Exit-Intent Modal Popup */}
-      {showExitModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl max-w-md p-6 text-center shadow-2xl border border-purple-100">
-            <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">🤖</div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2">Nova AI Intercept</h3>
-            
-            {isFetchingExitAi ? (
-              <p className="text-sm text-gray-500 py-4">Nova is analyzing your cart for personalized perks...</p>
-            ) : (
-              <>
-                <p className="text-sm text-purple-700 font-medium bg-purple-50 p-3 rounded-xl border border-purple-100 mb-3">
-                  "{exitAiMessage}"
-                </p>
-                {exitOffer && (
-                  <div className="mb-6 space-y-1">
-                    {exitOffer.evidence && (
-                      <p className="text-[11px] text-gray-500">🔍 Nova noticed: {exitOffer.evidence}</p>
-                    )}
-                    <p className="text-xs font-bold text-green-700">🎁 Your offer: {exitOffer.label}</p>
-                  </div>
-                )}
-              </>
-            )}
-
-            <div className="flex gap-3">
-              {exitOffer ? (
-                <button
-                  onClick={applyExitOffer}
-                  disabled={isFetchingExitAi}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer disabled:opacity-50"
-                >
-                  Apply Offer 🎁
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowExitModal(false)}
-                  disabled={isFetchingExitAi}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md cursor-pointer disabled:opacity-50"
-                >
-                  Continue Shopping 🛍️
-                </button>
-              )}
-              <button
-                onClick={() => setShowExitModal(false)}
-                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-semibold transition cursor-pointer"
-              >
-                No Thanks
-              </button>
-            </div>
+      {/* Nova offer toast: a short, non-blocking heads-up that points to the bell */}
+      {toast && currentRoute === '#store' && (
+        <div role="status" className="fixed bottom-6 right-6 z-[60] w-80 max-w-[calc(100vw-3rem)] bg-white rounded-2xl shadow-2xl border border-purple-200 p-4 space-y-2">
+          <div className="flex justify-between items-start gap-2">
+            <p className="text-sm font-bold text-purple-900">🔔 Nova found an offer for your bag</p>
+            <button onClick={() => setToast(null)} aria-label="Close" className="text-gray-400 hover:text-gray-700 font-bold">✕</button>
           </div>
+          <p className="text-xs font-bold text-green-700">🎁 {toast.offer.label}</p>
+          <button onClick={openNotificationsFromToast} className="w-full py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition">View offer</button>
         </div>
       )}
 
@@ -725,6 +849,11 @@ export default function App() {
                               {isAiRecovered && (
                                 <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
                                   🤖 AI Recovered
+                                </span>
+                              )}
+                              {s.origin === 'NOVA_OFFER_DISMISSED' && (
+                                <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold rounded-full">
+                                  🔕 Offer dismissed
                                 </span>
                               )}
                             </td>
