@@ -48,6 +48,8 @@ export default function App() {
   const [wishlist, setWishlist] = useState([]);
   const [isBagOpen, setIsBagOpen] = useState(false);
   const [agentMessage, setAgentMessage] = useState(null);
+  // In-app result dialog (replaces the browser's alert box): { title, tone, rows: [[label, value]], note }
+  const [dialog, setDialog] = useState(null);
   
   // Nova offer notifications (replaces the exit-intent popup)
   const [notifications, setNotifications] = useState([]);
@@ -318,10 +320,14 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Failed to recover session');
       const data = await res.json();
-      alert(`Recovery email successfully dispatched for session ${targetId}!\nDiagnosed cause: ${data.mock_email?.diagnosed_cause}\nOffer: ${data.mock_email?.offer_label}\nSubject: ${data.mock_email?.subject}`);
+      setDialog({
+        title: '🚀 Recovery email sent',
+        tone: 'success',
+        rows: [['Session', targetId], ['Diagnosed cause', data.mock_email?.diagnosed_cause], ['Offer', data.mock_email?.offer_label], ['Subject', data.mock_email?.subject]]
+      });
       loadDashboardData();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      setDialog({ title: 'Recovery failed', tone: 'error', note: err.message });
     }
   };
 
@@ -347,7 +353,11 @@ export default function App() {
       if (!res.ok) throw new Error('Checkout failed');
       const data = await res.json();
 
-      alert(`🎉 Order Placed Successfully!\nOrder ID: ${data.order_id}\nPayment via: ${selectedPayment}\nShipping: ${selectedShipping.label}\nTotal Paid: Rs. ${data.total_value}`);
+      setDialog({
+        title: '🎉 Order placed successfully',
+        tone: 'success',
+        rows: [['Order ID', data.order_id], ['Payment via', selectedPayment], ['Shipping', selectedShipping.label], ['Total paid', `Rs. ${data.total_value}`]]
+      });
 
       setCart([]);
       setSelectedShipping(SHIPPING_OPTIONS[0]);
@@ -358,7 +368,7 @@ export default function App() {
       window.location.hash = '#dashboard';
     } catch (err) {
       console.error(err);
-      alert('Checkout failed. Make sure your FastAPI backend is running.');
+      setDialog({ title: 'Checkout failed', tone: 'error', note: 'The order could not be placed. Make sure the CartCue backend is running.' });
     }
   };
 
@@ -418,7 +428,12 @@ export default function App() {
 
       if (!res.ok) throw new Error('Failed to save session');
 
-      alert(`Simulated Checkout Drop-off!\nSession ID: ${generatedSessionId}\nCause: ${causeName}\nTotal: Rs. ${finalTotalAmount}`);
+      setDialog({
+        title: 'Simulated checkout drop-off',
+        tone: 'info',
+        rows: [['Session ID', generatedSessionId], ['Cause', causeName], ['Total', `Rs. ${finalTotalAmount}`]],
+        note: 'Find it on the dashboard and click Analyze to see what Nova diagnoses.'
+      });
       setIsBagOpen(false);
       setCart([]);
       setSelectedShipping(SHIPPING_OPTIONS[0]);
@@ -426,7 +441,7 @@ export default function App() {
       window.location.hash = '#dashboard';
     } catch (err) {
       console.error(err);
-      alert('Simulation failed: Make sure FastAPI backend is running on port 8000.');
+      setDialog({ title: 'Simulation failed', tone: 'error', note: 'The session could not be saved. Make sure the CartCue backend is running.' });
     }
   };
 
@@ -580,6 +595,33 @@ export default function App() {
         </div>
       )}
 
+      {/* Result dialog: confirms an order, simulation or recovery email */}
+      {dialog && (
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="result-dialog-title" className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className={`px-6 py-4 border-b ${dialog.tone === 'error' ? 'bg-red-50 border-red-100' : dialog.tone === 'success' ? 'bg-green-50 border-green-100' : 'bg-purple-50 border-purple-100'}`}>
+              <h2 id="result-dialog-title" className={`text-lg font-black ${dialog.tone === 'error' ? 'text-red-800' : dialog.tone === 'success' ? 'text-green-800' : 'text-purple-900'}`}>{dialog.title}</h2>
+            </div>
+            <div className="px-6 py-4 space-y-3">
+              {dialog.rows && (
+                <dl className="space-y-2 text-sm">
+                  {dialog.rows.map(([label, value]) => (
+                    <div key={label} className="flex justify-between gap-4">
+                      <dt className="text-gray-500 shrink-0">{label}</dt>
+                      <dd className="font-semibold text-gray-900 text-right break-all">{value ?? '—'}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {dialog.note && <p className="text-sm text-gray-600">{dialog.note}</p>}
+            </div>
+            <div className="px-6 py-4 bg-gray-50 flex justify-end">
+              <button autoFocus onClick={() => setDialog(null)} className="px-5 py-2 bg-gray-900 hover:bg-black text-white text-sm font-bold rounded-lg transition">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Views */}
       {currentRoute === '#store' ? (
         <div className="max-w-7xl mx-auto p-8">
@@ -659,13 +701,13 @@ export default function App() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
             {filteredProducts.map((p) => (
-              <div key={p.id} className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm hover:shadow-md transition">
+              <div key={p.id} className="bg-white rounded-2xl overflow-hidden border border-gray-200 shadow-sm hover:shadow-md transition flex flex-col">
                 <img src={p.image} alt={p.name} className="w-full h-64 object-cover" />
-                <div className="p-4">
-                  <span className="text-[10px] font-bold text-pink-600 uppercase tracking-wide bg-pink-50 px-2 py-0.5 rounded">{p.category}</span>
+                <div className="p-4 flex flex-col flex-1">
+                  <span className="self-start text-[10px] font-bold text-pink-600 uppercase tracking-wide bg-pink-50 px-2 py-0.5 rounded">{p.category}</span>
                   <h3 className="font-semibold text-gray-800 text-sm mt-1.5 mb-1">{p.name}</h3>
                   <p className="text-gray-900 font-bold mb-4">Rs. {p.price}</p>
-                  <button onClick={() => addToCart(p)} className="w-full py-2.5 bg-gray-900 hover:bg-pink-600 text-white text-xs font-bold rounded-xl transition">Add to Bag</button>
+                  <button onClick={() => addToCart(p)} className="mt-auto w-full py-2.5 bg-gray-900 hover:bg-pink-600 text-white text-xs font-bold rounded-xl transition">Add to Bag</button>
                 </div>
               </div>
             ))}
@@ -686,12 +728,12 @@ export default function App() {
                       <p className="text-sm text-gray-500 text-center py-4">Your bag is empty.</p>
                     ) : (
                       cart.map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-sm border-b pb-3">
+                        <div key={idx} className="flex justify-between items-center gap-3 text-sm border-b pb-3">
                           <div>
                             <p className="font-medium text-gray-800">{item.name}</p>
                             <span className="text-xs text-gray-400">Rs. {item.price}</span>
                           </div>
-                          <button onClick={() => moveToWishlist(item, idx)} className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-lg transition border border-purple-200">
+                          <button onClick={() => moveToWishlist(item, idx)} className="shrink-0 px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-lg transition border border-purple-200">
                             💡 Move to Wishlist
                           </button>
                         </div>
@@ -819,8 +861,8 @@ export default function App() {
         </div>
       ) : (
         /* --- DASHBOARD VIEW --- */
-        <div className="max-w-7xl mx-auto p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="space-y-6">
+        <div className="max-w-7xl mx-auto p-8 grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-6 content-start">
             {summary && (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-3">
                 <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Executive Metrics</h2>
@@ -851,7 +893,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="md:col-span-2 space-y-6">
+          <div className="xl:col-span-2 space-y-6">
             {error && <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm"><strong>Error:</strong> {error}</div>}
 
             {result && (
@@ -901,9 +943,9 @@ export default function App() {
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 text-gray-400 text-xs uppercase">
-                      <th className="pb-2">Session ID</th>
-                      <th className="pb-2">Status</th>
-                      <th className="pb-2">Created At</th>
+                      <th className="pb-2 pr-4">Session ID</th>
+                      <th className="pb-2 pr-4">Status</th>
+                      <th className="pb-2 pr-4">Created At</th>
                       <th className="pb-2 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -923,21 +965,23 @@ export default function App() {
                         
                         return (
                           <tr key={idx} className="hover:bg-gray-50">
-                            <td className="py-3 font-mono text-xs text-blue-600">
-                              {s.session_id || s.id}
-                              {isAiRecovered && (
-                                <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
-                                  🤖 AI Recovered
-                                </span>
-                              )}
-                              {s.origin === 'NOVA_OFFER_DISMISSED' && (
-                                <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold rounded-full">
-                                  🔕 Offer dismissed
-                                </span>
-                              )}
+                            <td className="py-3 pr-4 font-mono text-xs text-blue-600">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span>{s.session_id || s.id}</span>
+                                {isAiRecovered && (
+                                  <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full whitespace-nowrap">
+                                    🤖 AI Recovered
+                                  </span>
+                                )}
+                                {s.origin === 'NOVA_OFFER_DISMISSED' && (
+                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold rounded-full whitespace-nowrap">
+                                    🔕 Offer dismissed
+                                  </span>
+                                )}
+                              </div>
                             </td>
-                            <td className="py-3">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            <td className="py-3 pr-4">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
                                 isCompleted 
                                   ? 'bg-green-100 text-green-700' 
                                   : isWaiting 
@@ -947,19 +991,19 @@ export default function App() {
                                 {s.status || 'ABANDONED'}
                               </span>
                             </td>
-                            <td className="py-3 text-xs text-gray-500">{formatDate(s.created_at)}</td>
-                            <td className="py-3 text-right space-x-2">
+                            <td className="py-3 pr-4 text-xs text-gray-500 whitespace-nowrap">{formatDate(s.created_at)}</td>
+                            <td className="py-3 text-right whitespace-nowrap">
                               {isCompleted ? (
-                                <span className="text-xs text-gray-400 font-semibold italic px-2">Order Completed</span>
+                                <span className="text-xs text-gray-400 font-semibold italic">Order Completed</span>
                               ) : isWaiting ? (
-                                <span className="text-xs text-purple-600 font-semibold italic px-2">📧 Email Sent (Waiting...)</span>
+                                <span className="text-xs text-purple-600 font-semibold italic">📧 Email Sent (Waiting...)</span>
                               ) : (
-                                <>
-                                  <button onClick={() => { setSessionId(s.session_id || s.id); handleAnalyze(s); }} className="px-3 py-1 bg-gray-100 hover:bg-blue-600 hover:text-white text-xs font-semibold rounded-lg transition">
+                                <div className="inline-flex items-center gap-2">
+                                  <button onClick={() => { setSessionId(s.session_id || s.id); handleAnalyze(s); }} className="px-3 py-1 bg-gray-100 hover:bg-blue-600 hover:text-white text-xs font-semibold rounded-lg transition border border-gray-200">
                                     {isAlreadyAnalyzed ? '🔍 Show Analysis' : 'Analyze'}
                                   </button>
                                   <button onClick={() => handleRecoverSession(s.session_id || s.id)} className="px-3 py-1 bg-purple-50 hover:bg-purple-600 hover:text-white text-purple-700 text-xs font-semibold rounded-lg transition border border-purple-200">🚀 Recover</button>
-                                </>
+                                </div>
                               )}
                             </td>
                           </tr>
