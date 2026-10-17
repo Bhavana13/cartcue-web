@@ -1,8 +1,8 @@
-# Stage 1: Build the React application
-FROM node:18-alpine AS builder
+# Stage 1: Build the React application (Vite 8 needs Node 20.19+)
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 

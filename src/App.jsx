@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+
+// Cloud Run URL comes from .env.production at build time; local dev talks to uvicorn
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 const CATEGORIES = ['All', "Women's Dresses", "Men's Apparels", 'Electronics'];
 
@@ -24,6 +27,15 @@ const SHIPPING_OPTIONS = [
 ];
 
 const PLATFORM_FEE = 23;
+
+async function fetchDashboardData() {
+  const responses = await Promise.all([
+    fetch(`${API_BASE_URL}/sessions?limit=20`),
+    fetch(`${API_BASE_URL}/analytics/summary`)
+  ]);
+  if (responses.some(res => !res.ok)) throw new Error('Backend returned an error');
+  return Promise.all(responses.map(res => res.json()));
+}
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(window.location.hash || '#store');
@@ -77,15 +89,14 @@ export default function App() {
         setHasTriggeredExit(true); // Ensures it only triggers once!
         setIsFetchingExitAi(true);
         try {
-          const res = await fetch('http://127.0.0.1:8000/agent/exit-intent', {
+          const res = await fetch(`${API_BASE_URL}/agent/exit-intent`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ cart_items: cart, total_value: finalTotalAmount })
           });
-          if (res.ok) {
-            const data = await res.json();
-            setExitAiMessage(data.message);
-          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          setExitAiMessage(data.message);
         } catch (err) {
           console.error('Exit intent AI error:', err);
           setExitAiMessage("We noticed you left items in your bag. Stay a bit longer and unlock special perks!");
@@ -98,28 +109,23 @@ export default function App() {
     return () => document.removeEventListener('mouseleave', handleMouseLeave);
   }, [showExitModal, hasTriggeredExit, cart, finalTotalAmount]);
 
+  const loadDashboardData = () =>
+    fetchDashboardData()
+      .then(([sessionsData, summaryData]) => {
+        setSessions(sessionsData);
+        setSummary(summaryData);
+        setError(null);
+      })
+      .catch((err) => {
+        console.error('Failed to load dashboard data:', err);
+        setError(`Could not load dashboard data from ${API_BASE_URL}.`);
+      });
+
   useEffect(() => {
     if (currentRoute === '#dashboard') {
       loadDashboardData();
     }
   }, [currentRoute]);
-
-  // Reset page to 1 when search or status filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, statusFilter]);
-
-  const loadDashboardData = async () => {
-    try {
-      const resSessions = await fetch('http://127.0.0.1:8000/sessions?limit=20');
-      if (resSessions.ok) setSessions(await resSessions.json());
-
-      const resSummary = await fetch('http://127.0.0.1:8000/analytics/summary');
-      if (resSummary.ok) setSummary(await resSummary.json());
-    } catch (err) {
-      console.error('Failed to load dashboard data:', err);
-    }
-  };
 
   const filteredProducts = selectedCategory === 'All' 
     ? PRODUCTS 
@@ -130,12 +136,12 @@ export default function App() {
     setIsBagOpen(true);
   };
 
-  const moveToWishlist = async (product) => {
-    setCart(cart.filter(item => item.id !== product.id));
+  const moveToWishlist = async (product, cartIndex) => {
+    setCart(cart.filter((_, idx) => idx !== cartIndex));
     setWishlist([...wishlist, product]);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/agent/wishlist-hesitation', {
+      const res = await fetch(`${API_BASE_URL}/agent/wishlist-hesitation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item_name: product.name, price: product.price })
@@ -151,7 +157,7 @@ export default function App() {
 
   const handleRecoverSession = async (targetId) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/sessions/${targetId}/recover`, {
+      const res = await fetch(`${API_BASE_URL}/sessions/${targetId}/recover`, {
         method: 'POST'
       });
       if (!res.ok) throw new Error('Failed to recover session');
@@ -165,9 +171,9 @@ export default function App() {
 
   const handleCheckoutOrder = async () => {
     try {
-      const isAiAgentOrder = wishlist.length > 0 || agentMessage !== null;
+      const isAiAgentOrder = cart.some(item => item.novaOffer) || Boolean(selectedShipping.waived);
 
-      const res = await fetch('http://127.0.0.1:8000/orders/checkout', {
+      const res = await fetch(`${API_BASE_URL}/orders/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,6 +181,7 @@ export default function App() {
           total_value: finalTotalAmount,
           payment_method: selectedPayment,
           shipping_method: selectedShipping.label,
+          shipping_fee_waived: Boolean(selectedShipping.waived),
           recovery_source: isAiAgentOrder ? 'NOVA_WISHLIST_AGENT' : 'ORGANIC',
           nova_intervention_triggered: isAiAgentOrder
         })
@@ -183,9 +190,10 @@ export default function App() {
       if (!res.ok) throw new Error('Checkout failed');
       const data = await res.json();
 
-      alert(`🎉 Order Placed Successfully!\nOrder ID: ${data.order_id}\nPayment via: ${selectedPayment}\nShipping: ${selectedShipping.label}\nTotal Paid: Rs. ${finalTotalAmount}`);
-      
+      alert(`🎉 Order Placed Successfully!\nOrder ID: ${data.order_id}\nPayment via: ${selectedPayment}\nShipping: ${selectedShipping.label}\nTotal Paid: Rs. ${data.total_value}`);
+
       setCart([]);
+      setSelectedShipping(SHIPPING_OPTIONS[0]);
       setWishlist([]);
       setAgentMessage(null);
       setIsBagOpen(false);
@@ -211,7 +219,7 @@ export default function App() {
         created_at: new Date().toISOString()
       };
 
-      const res = await fetch('http://127.0.0.1:8000/sessions', {
+      const res = await fetch(`${API_BASE_URL}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(sessionPayload)
@@ -222,6 +230,7 @@ export default function App() {
       alert(`Simulated Checkout Drop-off!\nSession ID: ${generatedSessionId}\nCause: ${causeName}\nTotal: Rs. ${finalTotalAmount}`);
       setIsBagOpen(false);
       setCart([]);
+      setSelectedShipping(SHIPPING_OPTIONS[0]);
       window.location.hash = '#dashboard';
     } catch (err) {
       console.error(err);
@@ -240,14 +249,15 @@ export default function App() {
         session_id: targetId,
         primary_cause: sessionObj.nova_analysis.primary_cause,
         confidence_score: sessionObj.nova_analysis.confidence_score,
-        explanation: sessionObj.nova_analysis.explanation
+        explanation: sessionObj.nova_analysis.explanation,
+        evidence_summary: sessionObj.nova_analysis.evidence_summary || []
       });
       setLoading(false);
       return;
     }
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/analyze', {
+      const response = await fetch(`${API_BASE_URL}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: targetId }),
@@ -402,7 +412,7 @@ export default function App() {
                             <p className="font-medium text-gray-800">{item.name}</p>
                             <span className="text-xs text-gray-400">Rs. {item.price}</span>
                           </div>
-                          <button onClick={() => moveToWishlist(item)} className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-lg transition border border-purple-200">
+                          <button onClick={() => moveToWishlist(item, idx)} className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-bold rounded-lg transition border border-purple-200">
                             💡 Move to Wishlist
                           </button>
                         </div>
@@ -434,10 +444,10 @@ export default function App() {
                               onClick={() => {
                                 if (isExpressUpgrade) {
                                   const priorityOpt = SHIPPING_OPTIONS.find(opt => opt.label.includes('Priority')) || SHIPPING_OPTIONS[2];
-                                  setSelectedShipping({ ...priorityOpt, fee: 0 });
+                                  setSelectedShipping({ ...priorityOpt, fee: 0, waived: true });
                                 }
-                                setCart([...cart, { ...w, price: adjustedPrice }]);
-                                setWishlist(wishlist.filter(item => item.id !== w.id));
+                                setCart([...cart, { ...w, price: adjustedPrice, novaOffer: true }]);
+                                setWishlist(wishlist.filter((_, i) => i !== idx));
                               }}
                               className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition shadow-sm"
                             >
@@ -571,6 +581,14 @@ export default function App() {
                   <p><strong>Primary Cause:</strong> <span className="text-red-600 font-semibold">{result.primary_cause}</span></p>
                   <p><strong>Confidence Score:</strong> {(result.confidence_score * 100).toFixed(0)}%</p>
                   <p><strong>Explanation:</strong> {result.explanation}</p>
+                  {result.evidence_summary?.length > 0 && (
+                    <div>
+                      <strong>Evidence:</strong>
+                      <ul className="list-disc ml-5 mt-1 text-gray-700">
+                        {result.evidence_summary.map((ev, i) => <li key={i}>{ev}</li>)}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -584,12 +602,12 @@ export default function App() {
                     type="text"
                     placeholder="Search Session ID..."
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
                     className="px-3 py-1.5 border border-gray-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-44"
                   />
                   <select
                     value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
+                    onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
                     className="px-3 py-1.5 border border-gray-300 rounded-xl text-xs bg-white font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="ALL">All Statuses</option>
@@ -616,7 +634,7 @@ export default function App() {
                       currentSessions.map((s, idx) => {
                         const isCompleted = (s.status || '').toUpperCase() === 'COMPLETED';
                         const isWaiting = (s.status || '').toUpperCase() === 'WAITING_ON_USER_TO_ACT';
-                        const isAiRecovered = s.metadata?.recovery_source === 'NOVA_WISHLIST_AGENT' || s.metadata?.nova_intervention_triggered === true;
+                        const isAiRecovered = isCompleted && s.metadata?.nova_intervention_triggered === true;
                         const isAlreadyAnalyzed = s.is_nova_analysed === true || s.nova_analysis != null;
                         
                         return (
