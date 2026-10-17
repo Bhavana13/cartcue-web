@@ -319,7 +319,7 @@ export default function App() {
 
       {/* AI-Driven Exit-Intent Modal Popup */}
       {showExitModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-2xl max-w-md p-6 text-center shadow-2xl border border-purple-100">
             <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">🤖</div>
             <h3 className="text-xl font-bold text-gray-900 mb-2">Nova AI Intercept</h3>
