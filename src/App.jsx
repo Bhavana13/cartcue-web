@@ -94,12 +94,19 @@ export default function App() {
           const res = await fetch(`${API_BASE_URL}/agent/exit-intent`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cart_items: cart, total_value: finalTotalAmount })
+            body: JSON.stringify({
+              cart_items: cart,
+              total_value: finalTotalAmount,
+              shipping_fee: selectedShipping.fee,
+              shipping_method: selectedShipping.label
+            })
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           setExitAiMessage(data.message);
-          setExitOffer(data.offer_type ? { type: data.offer_type, label: data.offer_label } : null);
+          setExitOffer(data.offer_type
+            ? { type: data.offer_type, label: data.offer_label, evidence: data.evidence_summary?.[0] }
+            : null);
         } catch (err) {
           console.error('Exit intent AI error:', err);
           setExitAiMessage("We noticed you left items in your bag. Stay a bit longer!");
@@ -111,13 +118,13 @@ export default function App() {
     };
     document.addEventListener('mouseleave', handleMouseLeave);
     return () => document.removeEventListener('mouseleave', handleMouseLeave);
-  }, [showExitModal, hasTriggeredExit, isBagOpen, cart, finalTotalAmount]);
+  }, [showExitModal, hasTriggeredExit, isBagOpen, cart, finalTotalAmount, selectedShipping]);
 
   // Applies the offer Nova presented in the exit-intent popup, then shows the updated bag
   const applyExitOffer = () => {
-    if (exitOffer?.type === 'FREE_PRIORITY_DELIVERY') {
-      const priorityOpt = SHIPPING_OPTIONS.find(opt => opt.label.includes('Priority')) || SHIPPING_OPTIONS[2];
-      setSelectedShipping({ ...priorityOpt, fee: 0, waived: true });
+    if (exitOffer?.type === 'FREE_SHIPPING') {
+      // Nova diagnosed the delivery fee as the problem: waive it on the shopper's chosen option
+      setSelectedShipping({ ...selectedShipping, fee: 0, waived: true });
     } else if (exitOffer?.type === 'PERCENT_OFF_10') {
       // Items already discounted by a wishlist offer keep their price
       setCart(cart.map(item => item.novaOffer ? item : { ...item, price: Math.round(item.price * 0.9), novaOffer: true }));
@@ -180,7 +187,7 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Failed to recover session');
       const data = await res.json();
-      alert(`Recovery email successfully dispatched for session ${targetId}!\nSubject: ${data.mock_email?.subject}`);
+      alert(`Recovery email successfully dispatched for session ${targetId}!\nDiagnosed cause: ${data.mock_email?.diagnosed_cause}\nOffer: ${data.mock_email?.offer_label}\nSubject: ${data.mock_email?.subject}`);
       loadDashboardData();
     } catch (err) {
       alert(`Error: ${err.message}`);
@@ -223,9 +230,41 @@ export default function App() {
     }
   };
 
+  // Telemetry a real storefront would emit for each failure trigger. Nova diagnoses from these events;
+  // ground_truth_cause is only its fallback when the events are inconclusive.
+  const buildTriggerTelemetry = (causeEnum) => {
+    const now = Date.now();
+    const at = (seconds) => new Date(now + seconds * 1000).toISOString();
+    const cartEvent = { timestamp: at(0), event_type: 'STEP_TRANSITION', step_name: 'CART', metadata: { cart_value: itemsTotal } };
+
+    if (causeEnum === 'SHIPPING_COST_SURPRISE') {
+      // The fee the shopper picked, or the Priority fee revealed at review if they were still on free delivery
+      const shownOption = selectedShipping.fee > 0 ? selectedShipping : SHIPPING_OPTIONS[2];
+      return {
+        dropOffStep: 'REVIEW',
+        events: [cartEvent, { timestamp: at(25), event_type: 'STEP_TRANSITION', step_name: 'REVIEW',
+          metadata: { shipping_cost_shown: shownOption.fee, shipping_option: shownOption.label } }]
+      };
+    }
+    if (causeEnum === 'PAYMENT_FRICTION') {
+      return {
+        dropOffStep: 'PAYMENT',
+        events: [cartEvent, { timestamp: at(40), event_type: 'PAYMENT_ATTEMPT', step_name: 'PAYMENT',
+          metadata: { gateway_response: 'DECLINED', error_code: 'ERR_PAYMENT_GATEWAY_TIMEOUT', payment_method: selectedPayment } }]
+      };
+    }
+    // TECHNICAL_DROP_OFF: forced account wall
+    return {
+      dropOffStep: 'AUTHENTICATION',
+      events: [cartEvent, { timestamp: at(15), event_type: 'STEP_TRANSITION', step_name: 'AUTHENTICATION',
+        metadata: { latency_ms: 4800, error: 'Forced sign-up wall before payment' } }]
+    };
+  };
+
   const handleSimulateCause = async (causeName, causeEnum) => {
     try {
       const generatedSessionId = `cs_${Math.random().toString(16).slice(2, 10)}`;
+      const telemetry = buildTriggerTelemetry(causeEnum);
 
       const sessionPayload = {
         session_id: generatedSessionId,
@@ -233,7 +272,8 @@ export default function App() {
         cart_value: finalTotalAmount,
         items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, category: i.category })),
         ground_truth_cause: causeEnum,
-        drop_off_step: "CHECKOUT",
+        drop_off_step: telemetry.dropOffStep,
+        events: telemetry.events,
         status: "abandoned",
         created_at: new Date().toISOString()
       };
@@ -351,7 +391,12 @@ export default function App() {
                   "{exitAiMessage}"
                 </p>
                 {exitOffer && (
-                  <p className="text-xs font-bold text-green-700 mb-6">🎁 Your offer: {exitOffer.label}</p>
+                  <div className="mb-6 space-y-1">
+                    {exitOffer.evidence && (
+                      <p className="text-[11px] text-gray-500">🔍 Nova noticed: {exitOffer.evidence}</p>
+                    )}
+                    <p className="text-xs font-bold text-green-700">🎁 Your offer: {exitOffer.label}</p>
+                  </div>
                 )}
               </>
             )}
@@ -555,15 +600,16 @@ export default function App() {
                         🛍️ Pay via {selectedPayment} & Place Order
                       </button>
 
-                      <div className="relative flex py-1 items-center">
-                        <div className="flex-grow border-t border-gray-200"></div>
-                        <span className="flex-shrink mx-4 text-gray-400 text-[10px] uppercase font-bold">Or test failure triggers</span>
-                        <div className="flex-grow border-t border-gray-200"></div>
+                      {/* Demo controls: kept visually separate from the real checkout */}
+                      <div className="border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 p-3 space-y-2">
+                        <div>
+                          <p className="text-[10px] uppercase font-bold tracking-wide text-gray-500">Demo: simulate why a shopper abandons</p>
+                          <p className="text-[11px] text-gray-500 mt-0.5">Creates an abandoned checkout with realistic telemetry. Then open the CartCue AI Dashboard and click Analyze.</p>
+                        </div>
+                        <button onClick={() => handleSimulateCause('Shipping Fee Shock', 'SHIPPING_COST_SURPRISE')} className="w-full py-2 bg-white border border-amber-400 text-amber-700 hover:bg-amber-50 text-xs font-bold rounded-xl transition">🚨 Simulate: Shipping Fee Shock</button>
+                        <button onClick={() => handleSimulateCause('Payment Gateway Timeout', 'PAYMENT_FRICTION')} className="w-full py-2 bg-white border border-red-400 text-red-700 hover:bg-red-50 text-xs font-bold rounded-xl transition">⚠️ Simulate: Payment Gateway Timeout</button>
+                        <button onClick={() => handleSimulateCause('Forced Account Wall', 'TECHNICAL_DROP_OFF')} className="w-full py-2 bg-white border border-purple-400 text-purple-700 hover:bg-purple-50 text-xs font-bold rounded-xl transition">🔒 Simulate: Forced Account Wall</button>
                       </div>
-
-                      <button onClick={() => handleSimulateCause('Shipping Fee Shock', 'SHIPPING_COST_SURPRISE')} className="w-full py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition shadow-sm">🚨 Trigger: Shipping Fee Shock</button>
-                      <button onClick={() => handleSimulateCause('Payment Gateway Timeout', 'PAYMENT_FRICTION')} className="w-full py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition shadow-sm">⚠️ Trigger: Payment Gateway Timeout</button>
-                      <button onClick={() => handleSimulateCause('Forced Account Wall', 'TECHNICAL_DROP_OFF')} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl transition shadow-sm">🔒 Trigger: Forced Account Wall</button>
                     </div>
                   )}
                 </div>
