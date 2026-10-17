@@ -40,6 +40,10 @@ async function fetchDashboardData() {
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(window.location.hash || '#store');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  // Intro guide for first-time visitors (judges); remembered per browser when hidden
+  const [showGuide, setShowGuide] = useState(() => {
+    try { return localStorage.getItem('cartcue_hide_guide') !== '1'; } catch { return true; }
+  });
   const [cart, setCart] = useState([]);
   const [wishlist, setWishlist] = useState([]);
   const [isBagOpen, setIsBagOpen] = useState(false);
@@ -263,6 +267,19 @@ export default function App() {
 
   const addToCart = (product) => {
     setCart([...cart, product]);
+    setIsBagOpen(true);
+  };
+
+  const toggleGuide = (visible) => {
+    setShowGuide(visible);
+    try { localStorage.setItem('cartcue_hide_guide', visible ? '0' : '1'); } catch { /* storage unavailable */ }
+  };
+
+  // One-click start for the guided demo: a Rs. 699 dress with Rs. 150 Express delivery is a clear shipping-shock case
+  const startGuidedDemo = () => {
+    const dress = PRODUCTS.find(p => p.name === 'SFOTY A-Line Midi Dress');
+    setCart([...cart, dress]);
+    setSelectedShipping(SHIPPING_OPTIONS[1]);
     setIsBagOpen(true);
   };
 
@@ -557,6 +574,50 @@ export default function App() {
       {/* Views */}
       {currentRoute === '#store' ? (
         <div className="max-w-7xl mx-auto p-8">
+          {showGuide && (
+            <section aria-labelledby="guide-title" className="mb-8 rounded-2xl border border-purple-200 bg-gradient-to-br from-purple-50 to-white p-6 shadow-sm">
+              <div className="flex justify-between items-start gap-4">
+                <div className="max-w-3xl">
+                  <span className="inline-block text-[10px] font-bold uppercase tracking-wider bg-purple-600 text-white px-2 py-0.5 rounded">Demo store · built to showcase CartCue</span>
+                  <h2 id="guide-title" className="mt-2 text-xl md:text-2xl font-black text-gray-900">
+                    Omnivo is a test store for CartCue, an AI cart-recovery engine
+                  </h2>
+                  <p className="mt-2 text-sm text-gray-600 leading-relaxed">
+                    About 70% of online carts are abandoned, often because of hidden friction the store never sees. CartCue is an
+                    intelligent diagnostic layer on top of the store: its agent, <strong className="text-purple-700">Nova</strong>, captures
+                    live shopper hesitation, runs multi-step root-cause reasoning with rules and Gemini on Cloud Run, stores
+                    behavioural state in Firestore, and responds with targeted interventions that turn lost revenue into completed checkouts.
+                  </p>
+                </div>
+                <button onClick={() => toggleGuide(false)} aria-label="Hide the demo guide" className="text-gray-400 hover:text-gray-700 font-bold">✕</button>
+              </div>
+
+              <ol className="mt-5 grid gap-3 md:grid-cols-3">
+                <li className="rounded-xl bg-white border border-gray-200 p-4">
+                  <p className="text-xs font-bold text-purple-700">1 · Hesitate like a real shopper</p>
+                  <p className="mt-1 text-sm text-gray-600">Add an item and pick a paid delivery option, then wait ~5 seconds. Nova diagnoses the bag and sends an offer to the 🔔 bell.</p>
+                </li>
+                <li className="rounded-xl bg-white border border-gray-200 p-4">
+                  <p className="text-xs font-bold text-purple-700">2 · Apply it, or dismiss it</p>
+                  <p className="mt-1 text-sm text-gray-600">Apply the offer and place the order (an AI recovery), or dismiss it and the bag is saved as an abandoned checkout. The bag's dashed Demo panel can also simulate drop-offs.</p>
+                </li>
+                <li className="rounded-xl bg-white border border-gray-200 p-4">
+                  <p className="text-xs font-bold text-purple-700">3 · See the merchant's side</p>
+                  <p className="mt-1 text-sm text-gray-600">Open the CartCue AI Dashboard: Analyze shows why the shopper left, with evidence; Recover sends an offer that fixes that reason.</p>
+                </li>
+              </ol>
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button onClick={startGuidedDemo} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-lg shadow transition">
+                  ▶ Start the demo: add a dress with Express delivery
+                </button>
+                <a href="#dashboard" className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-bold rounded-lg transition">
+                  🧠 Open CartCue AI Dashboard
+                </a>
+              </div>
+            </section>
+          )}
+
           {agentMessage && (
             <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
               <div className="flex items-center gap-3">
@@ -573,7 +634,12 @@ export default function App() {
           <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <h1 className="text-2xl font-bold text-gray-800">Explore Catalog & Test Checkout Triggers</h1>
-              <p className="text-sm text-gray-500">Filter category, add to bag, or test wishlist price hesitation.</p>
+              <p className="text-sm text-gray-500">
+                Filter category, add to bag, or test wishlist price hesitation.
+                {!showGuide && (
+                  <button onClick={() => toggleGuide(true)} className="ml-2 text-purple-700 font-semibold hover:underline">ℹ️ How this demo works</button>
+                )}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               {CATEGORIES.map((cat) => (
@@ -834,7 +900,11 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {currentSessions.length === 0 ? (
-                      <tr><td colSpan="4" className="py-6 text-center text-gray-400 text-xs">No matching sessions found.</td></tr>
+                      <tr><td colSpan="4" className="py-6 text-center text-gray-400 text-xs">
+                        {sessions.length === 0
+                          ? <>No checkout sessions yet. In the <a href="#store" className="text-purple-700 font-semibold hover:underline">Omnivo Store</a>, add an item, then dismiss Nova's offer or use the Demo panel in the bag.</>
+                          : 'No matching sessions found.'}
+                      </td></tr>
                     ) : (
                       currentSessions.map((s, idx) => {
                         const isCompleted = (s.status || '').toUpperCase() === 'COMPLETED';
