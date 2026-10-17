@@ -144,14 +144,17 @@ export default function App() {
     requestOfferRef.current = requestNovaOffer;
   });
 
-  // Signal 1: the bag sits unchanged for a few seconds (hesitation)
-  useEffect(() => {
-    if (cart.length === 0) return;
-    const timer = setTimeout(() => requestOfferRef.current?.(), 5000);
-    return () => clearTimeout(timer);
-  }, [bagKey, cart.length]);
+  // Signal 1: the shopper closes the bag without paying (see closeBag)
 
-  // Signal 2: the mouse heads for the tab bar (exit intent)
+  // Signal 2: items wait in a closed bag while the shopper keeps browsing (fallback).
+  // Never while the bag is open: that shopper is looking at checkout, not hesitating.
+  useEffect(() => {
+    if (cart.length === 0 || isBagOpen) return;
+    const timer = setTimeout(() => requestOfferRef.current?.(), 8000);
+    return () => clearTimeout(timer);
+  }, [bagKey, cart.length, isBagOpen]);
+
+  // Signal 3: the mouse heads for the tab bar (exit intent)
   useEffect(() => {
     const handleMouseLeave = (e) => {
       if (e.clientY <= 10) requestOfferRef.current?.();
@@ -268,6 +271,12 @@ export default function App() {
   const addToCart = (product) => {
     setCart([...cart, product]);
     setIsBagOpen(true);
+  };
+
+  // Closing the bag with items still in it is the clearest hesitation signal
+  const closeBag = () => {
+    setIsBagOpen(false);
+    if (cart.length > 0) requestOfferRef.current?.();
   };
 
   const toggleGuide = (visible) => {
@@ -522,7 +531,7 @@ export default function App() {
                       <p className="px-4 py-3 text-xs text-purple-700 animate-pulse">Nova is analysing your bag…</p>
                     )}
                     {notifications.length === 0 && !isNovaAnalyzing && (
-                      <p className="px-4 py-6 text-xs text-gray-500 text-center">No offers yet. Nova checks your bag a few seconds after you add items.</p>
+                      <p className="px-4 py-6 text-xs text-gray-500 text-center">No offers yet. Nova checks your bag when you close it without paying.</p>
                     )}
                     {notifications.map(n => (
                       <div key={n.id} className={`px-4 py-3 space-y-2 ${n.status === 'active' ? '' : 'opacity-60'}`}>
@@ -595,7 +604,7 @@ export default function App() {
               <ol className="mt-5 grid gap-3 md:grid-cols-3">
                 <li className="rounded-xl bg-white border border-gray-200 p-4">
                   <p className="text-xs font-bold text-purple-700">1 · Hesitate like a real shopper</p>
-                  <p className="mt-1 text-sm text-gray-600">Add an item and pick a paid delivery option, then wait ~5 seconds. Nova diagnoses the bag and sends an offer to the 🔔 bell.</p>
+                  <p className="mt-1 text-sm text-gray-600">Add an item, pick a paid delivery option, then close the bag without paying. Nova diagnoses the bag and sends an offer to the 🔔 bell.</p>
                 </li>
                 <li className="rounded-xl bg-white border border-gray-200 p-4">
                   <p className="text-xs font-bold text-purple-700">2 · Apply it, or dismiss it</p>
@@ -669,7 +678,7 @@ export default function App() {
                 <div>
                   <div className="flex justify-between items-center mb-6 border-b pb-3">
                     <h2 className="text-lg font-bold text-gray-800">Shopping Bag ({cart.length})</h2>
-                    <button onClick={() => setIsBagOpen(false)} className="text-gray-400 hover:text-gray-700 font-bold text-lg">✕</button>
+                    <button onClick={closeBag} aria-label="Close bag" className="text-gray-400 hover:text-gray-700 font-bold text-lg">✕</button>
                   </div>
 
                   <div className="space-y-3 mb-6">
@@ -803,7 +812,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => setIsBagOpen(false)} className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition mt-4">Continue Shopping</button>
+                <button onClick={closeBag} className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition mt-4">Continue Shopping</button>
               </div>
             </div>
           )}

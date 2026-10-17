@@ -17,7 +17,7 @@ CartCue gives online stores an AI agent, **Nova**, that finds out *why* a shoppe
 ### Omnivo store (`#store`)
 - **Demo guide.** The store opens with a short guide explaining that Omnivo is a test store for CartCue, three steps to try, and a **▶ Start the demo** button that adds a dress with Express delivery. It can be hidden and brought back with "ℹ️ How this demo works".
 - **Browse and build a bag.** Pick a shipping method (Standard free, Express Rs. 150, Same-Day Priority Rs. 350) and a payment gateway (PhonePe, GooglePay, Paytm), and see a price breakdown.
-- **Nova bell offers.** When the bag sits unchanged for about 5 seconds, or the mouse heads for the tab bar, Nova analyses the bag in the background:
+- **Nova bell offers.** When the shopper closes the bag without paying, or the mouse heads for the tab bar, Nova analyses the bag in the background (also after ~8 seconds of browsing with items in a closed bag; never while the bag is open):
   - the 🔔 bell pulses while it works
   - a toast appears when the offer is ready
   - the offer matches the diagnosed cause: free delivery when the shipping fee is the problem, otherwise 10% off
@@ -45,7 +45,7 @@ CartCue gives online stores an AI agent, **Nova**, that finds out *why* a shoppe
 
 **Path 2: Nova bell recovery**
 1. Click **▶ Start the demo** in the guide, or add the **SFOTY A-Line Midi Dress** and choose **Express Delivery (Rs. 150)** yourself.
-2. Wait about 5 seconds for the toast, then click **View offer** → **Apply offer**. Shipping becomes FREE.
+2. Close the bag (✕) without paying. The toast appears a few seconds later; click **View offer** → **Apply offer**. Shipping becomes FREE.
 3. Place the order. On the dashboard, it shows **🤖 AI Recovered**.
 4. Or click **Dismiss** in step 2 instead. The bag appears on the dashboard as an abandoned session (🔕) to Analyze and Recover.
 
