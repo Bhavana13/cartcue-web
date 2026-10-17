@@ -33,6 +33,11 @@ export default function App() {
   const [isBagOpen, setIsBagOpen] = useState(false);
   const [agentMessage, setAgentMessage] = useState(null);
   
+  // Exit-Intent AI states
+  const [showExitModal, setShowExitModal] = useState(false);
+  const [exitAiMessage, setExitAiMessage] = useState('');
+  const [isFetchingExitAi, setIsFetchingExitAi] = useState(false);
+  
   // Checkout options state
   const [selectedPayment, setSelectedPayment] = useState('PhonePe');
   const [selectedShipping, setSelectedShipping] = useState(SHIPPING_OPTIONS[0]);
@@ -62,6 +67,34 @@ export default function App() {
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  // AI-Driven Exit-Intent Mouseleave Event Listener
+  useEffect(() => {
+    const handleMouseLeave = async (e) => {
+      if (e.clientY <= 10 && !showExitModal && cart.length > 0) {
+        setShowExitModal(true);
+        setIsFetchingExitAi(true);
+        try {
+          const res = await fetch('http://127.0.0.1:8000/agent/exit-intent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cart_items: cart, total_value: finalTotalAmount })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setExitAiMessage(data.message);
+          }
+        } catch (err) {
+          console.error('Exit intent AI error:', err);
+          setExitAiMessage("We noticed you left items in your bag. Stay a bit longer and unlock special perks!");
+        } finally {
+          setIsFetchingExitAi(false);
+        }
+      }
+    };
+    document.addEventListener('mouseleave', handleMouseLeave);
+    return () => document.removeEventListener('mouseleave', handleMouseLeave);
+  }, [showExitModal, cart, finalTotalAmount]);
 
   useEffect(() => {
     if (currentRoute === '#dashboard') {
@@ -200,7 +233,6 @@ export default function App() {
     setResult(null);
     const targetId = sessionObj?.session_id || sessionObj?.id || sessionId;
 
-    // If already analyzed and cached, load instantly from state without calling API
     if (sessionObj?.is_nova_analysed && sessionObj?.nova_analysis) {
       setResult({
         session_id: targetId,
@@ -235,7 +267,6 @@ export default function App() {
     return isNaN(d.getTime()) ? dateString : d.toLocaleString();
   };
 
-  // Filter sessions by search query (Session ID) and status
   const filteredSessions = sessions.filter(s => {
     const sId = (s.session_id || s.id || '').toLowerCase();
     const matchesSearch = sId.includes(searchQuery.toLowerCase());
@@ -246,7 +277,6 @@ export default function App() {
     return matchesSearch;
   });
 
-  // Pagination calculations
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentSessions = filteredSessions.slice(indexOfFirstItem, indexOfLastItem);
@@ -274,6 +304,39 @@ export default function App() {
           </button>
         )}
       </nav>
+
+      {/* AI-Driven Exit-Intent Modal Popup */}
+      {showExitModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md p-6 text-center shadow-2xl border border-purple-100">
+            <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">🤖</div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Nova AI Intercept</h3>
+            
+            {isFetchingExitAi ? (
+              <p className="text-sm text-gray-500 py-4">Nova is analyzing your cart for personalized perks...</p>
+            ) : (
+              <p className="text-sm text-purple-700 font-medium bg-purple-50 p-3 rounded-xl border border-purple-100 mb-6">
+                "{exitAiMessage}"
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowExitModal(false)}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-md"
+              >
+                Continue Shopping 🛍️
+              </button>
+              <button
+                onClick={() => setShowExitModal(false)}
+                className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl font-semibold transition"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Views */}
       {currentRoute === '#store' ? (
@@ -367,10 +430,9 @@ export default function App() {
                             </div>
                             <button
                               onClick={() => {
-                                // If it's an express upgrade, automatically switch the selected shipping option to Priority
                                 if (isExpressUpgrade) {
                                   const priorityOpt = SHIPPING_OPTIONS.find(opt => opt.label.includes('Priority')) || SHIPPING_OPTIONS[2];
-                                  setSelectedShipping({ ...priorityOpt, fee: 0 }); // Apply free priority shipping perk!
+                                  setSelectedShipping({ ...priorityOpt, fee: 0 });
                                 }
                                 setCart([...cart, { ...w, price: adjustedPrice }]);
                                 setWishlist(wishlist.filter(item => item.id !== w.id));
@@ -387,7 +449,6 @@ export default function App() {
 
                   {cart.length > 0 && (
                     <div className="space-y-4 pt-4 border-t">
-                      {/* Shipping Option Selector */}
                       <div>
                         <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Shipping Method</label>
                         <select
@@ -404,7 +465,6 @@ export default function App() {
                         </select>
                       </div>
 
-                      {/* Payment Gateway Options */}
                       <div>
                         <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Select Payment Gateway</label>
                         <div className="grid grid-cols-3 gap-2">
@@ -421,7 +481,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Price Details Breakdown Box */}
                       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 space-y-2 text-xs">
                         <h4 className="font-bold text-gray-700 uppercase tracking-wide mb-1">Price Details</h4>
                         <div className="flex justify-between text-gray-600">
@@ -477,7 +536,6 @@ export default function App() {
                 <div className="flex justify-between items-center"><span className="text-sm text-gray-600">Recovery Rate:</span><span className="font-bold text-green-600">{summary.recovery_rate_percentage}%</span></div>
                 <div className="flex justify-between items-center"><span className="text-sm text-gray-600">Revenue at Risk:</span><span className="font-bold text-pink-600">Rs. {summary.total_revenue_at_risk}</span></div>
                 
-                {/* AI Agent Conversion Stats */}
                 <div className="pt-3 border-t border-gray-100 space-y-2">
                   <div className="flex justify-between items-center text-xs font-bold text-purple-900">
                     <span>🤖 AI Recovered Orders:</span>
@@ -519,7 +577,6 @@ export default function App() {
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-3">
                 <h2 className="text-lg font-bold text-gray-800">Checkout Sessions & Orders</h2>
                 
-                {/* Search & Status Filters */}
                 <div className="flex flex-wrap gap-2 w-full md:w-auto">
                   <input
                     type="text"
@@ -604,7 +661,6 @@ export default function App() {
                 </table>
               </div>
 
-              {/* Pagination Controls */}
               <div className="flex flex-col sm:flex-row justify-between items-center pt-4 mt-4 border-t border-gray-100 text-xs text-gray-600 gap-3">
                 <span>
                   Showing {filteredSessions.length > 0 ? indexOfFirstItem + 1 : 0} to {Math.min(indexOfLastItem, filteredSessions.length)} of {filteredSessions.length} sessions
